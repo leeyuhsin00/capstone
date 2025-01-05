@@ -1,0 +1,420 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+# import data
+data = read.csv('out.csv', header=TRUE)
+data2 = read.csv('data2.csv', header=TRUE)
+data3 = read.csv('data3.csv', header=TRUE)
+head(data)
+```
+```{r}
+categorical_cols <- c('AGE3','MOVSINPYR2','SEXIDENT','SPEAKENGL','LVLDIFSEE2','LVLDIFHEAR2','LVLDIFWALK2','LVLDIFMEM2','LVLDIFCARE2','LVLDIFCOMM2','IRSEX','IRMARIT','IREDUHIGHST2','NEWRACE2','HEALTH2','IRWRKSTAT','IRHHSIZ2','IRKI17_2','IRHH65_2','IRMEDICR','IRMCDCHP','IRPRVHLT','IRPINC3','IRFAMIN3','GOVTPROG','BOOKED','IRCIGRC','IRNICVAPREC','IRALCRC','IRCBDHMPREC','IRMJRC','PREG','COCLNEGMH')
+
+# change categorical variables to factor
+data[categorical_cols] <- lapply(data[categorical_cols], factor)
+data2[categorical_cols] <- lapply(data2[categorical_cols], factor)
+data3[categorical_cols] <- lapply(data3[categorical_cols], factor)
+data3['MICATPY'] <- lapply(data3['MICATPY'], factor)
+```
+
+```{r}
+# check factor class
+sapply(data3, class)
+```
+```{r}
+# load dplyr library
+library(dplyr)
+
+# normalize
+data_scaled <- data %>%  mutate(across(where(is.numeric)  & !SMIPPPY, scale))
+data2_scaled <- data2 %>%  mutate(across(where(is.numeric) & !SMIPPPY, scale))
+data3_scaled <- data3 %>%  mutate(across(where(is.numeric) & !MICATPY, scale))
+```
+
+Simple OLS
+```{r}
+model <- lm(SMIPPPY ~ ., data = data_scaled)
+plot(model)
+```
+Plot studentized residuals (OLS)
+```{r}
+library(ggplot2)
+# OLS (original)
+fitted_o <- model$fitted.values
+stud_res_o <- rstudent(model)
+df_stud_o <- data.frame(Fitted = fitted_o, Studentized_Residuals = stud_res_o) 
+ggplot(df_stud_o, aes(x = Fitted, y = Studentized_Residuals)) +
+  geom_point(color = "steelblue") +
+  geom_smooth(method = "loess", color = "green", se = FALSE, lwd = 1.2, span = 0.75) +  # Add LOWESS line 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +  # Add a horizontal line at y = 0
+  theme_minimal() +
+  labs(title = "Studentized Residuals vs Fitted Values (OLS original)", 
+       x = "Fitted Values", 
+       y = "Studentized Residuals")
+```
+Testing multicollinearity using adjusted GVIF
+```{r}
+library(car)
+gvif_adj <- vif(model)[,3]
+
+# plot
+labels_gvif <- names(gvif_adj)
+df_gvif <- data.frame(Labels = labels_gvif, GVIF = gvif_adj)
+ggplot(df_gvif, aes(x = Labels, y = GVIF)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Multicollinearity", x = "Coefficient Labels", y = "Adjusted GVIF")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))  # Rotate labels
+```
+Plot studentized residuals (WLS)
+```{r}
+# WLS original
+weights_w <- 1 / lm(abs(model$residuals) ~ model$fitted.values)$fitted.values^2
+model_w <- lm(formula = SMIPPPY ~ ., data = data_scaled, weights = weights_w)
+
+fitted_ow <- model_w$fitted.values
+stud_res_ow <- rstudent(model_w)
+df_stud_ow <- data.frame(Fitted = fitted_ow, Studentized_Residuals = stud_res_ow) 
+ggplot(df_stud_ow, aes(x = Fitted, y = Studentized_Residuals)) +
+  geom_point(color = "steelblue") +
+  geom_smooth(method = "loess", color = "green", se = FALSE, lwd = 1.2, span = 0.75) +  # Add LOWESS line 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +  # Add a horizontal line at y = 0
+  theme_minimal() +
+  labs(title = "Studentized Residuals vs Fitted Values (WLS original)", 
+       x = "Fitted Values", 
+       y = "Studentized Residuals")
+```
+
+Backward Regression
+```{r}
+library(MASS)
+# Fit the full model 
+full.model <- lm(SMIPPPY ~., data = data_scaled)
+# Stepwise regression model
+step.model <- stepAIC(full.model, direction = "backward", 
+                      trace = FALSE)
+summary(step.model)
+```
+
+Backward Regression with WLS
+```{r}
+backward_model$call
+weights <- 1 / lm(abs(backward_model$residuals) ~ backward_model$fitted.values)$fitted.values^2
+backward_model_w <- lm(formula = SMIPPPY ~ AGE3 + MOVSINPYR2 + SEXIDENT + SPEAKENGL + 
+    LVLDIFSEE2 + LVLDIFHEAR2 + LVLDIFWALK2 + LVLDIFMEM2 + LVLDIFCARE2 + 
+    LVLDIFCOMM2 + IRSEX + IREDUHIGHST2 + NEWRACE2 + HEALTH2 + 
+    IRHHSIZ2 + IRKI17_2 + IRMEDICR + IRPINC3 + IRFAMIN3 + GOVTPROG + 
+    BOOKED + IRNICVAPREC + IRALCRC + IRCBDHMPREC + IRMJRC + IRCIGFM + 
+    IRNICVAP30N + IRALCFM + IRALCBNG30D + IRMJFM + PREG + BMI2 + 
+    COCLNEGMH, data = data_scaled, weights = weights)
+```
+
+Shift and box-cox.
+```{r}
+library(MASS)
+bc_model <- lm(formula = SMIPPPY+6 ~ ., data = data_scaled)
+bc <- boxcox(bc_model, plotit=T)
+```
+
+```{r}
+# best lambda using cross validation
+lambda <- bc$x[which.max(bc$y)]
+bc_model_2 <- lm(formula = ((SMIPPPY+6)^lambda -1)/lambda ~ ., data = data_scaled)
+plot(bc_model_2)
+```
+
+Studentized Residuals (Box-Cox)
+```{r}
+fitted_bc <- bc_model_2$fitted.values
+stud_res_bc <- rstudent(bc_model_2)
+df_stud_bc <- data.frame(Fitted = fitted_bc, Studentized_Residuals = stud_res_bc) 
+ggplot(df_stud_bc, aes(x = Fitted, y = Studentized_Residuals)) +
+  geom_point(color = "steelblue") +
+  geom_smooth(method = "loess", color = "green", se = FALSE, lwd = 1.2, span = 0.75) +  # Add LOWESS line 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +  # Add a horizontal line at y = 0
+  theme_minimal() +
+  labs(title = "Studentized Residuals vs Fitted Values (BoxCox)", 
+       x = "Fitted Values", 
+       y = "Studentized Residuals")
+```
+
+
+LASSO
+```{r}
+library(glmnet)
+
+x_vars <- model.matrix(SMIPPPY~. , data = data_scaled)
+y_var <- data_scaled$SMIPPPY
+
+# perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x_vars, y_var, alpha = 1, weights=weights_w)
+
+# find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+```
+
+Lasso coefficients
+```{r, fig.height=20}
+lasso_best <- glmnet(x_vars, y_var, alpha = 1, lambda = best_lambda, weight=weights_w)
+
+# Lasso
+coef_l <- as.matrix(coef(lasso_best))
+labels_l <- rownames(coef_l)
+df_l <- data.frame(Labels = as.matrix(labels_l), Coefficients = coef_l)
+ggplot(df_l, aes(x = labels_l, y = coef_l)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Coefficient Sizes (Lasso)", x = "Coefficient Labels", y = "Coefficient Sizes") +
+  coord_flip()
+```
+
+Lasso qqplot
+```{r}
+lasso_fitted <- predict(lasso_best, x_vars)
+residuals <- data_scaled$SMIPPPY - lasso_fitted
+plot(lasso_fitted, residuals)
+qqnorm(residuals)
+qqline(residuals)
+```
+
+LAD
+```{r}
+library(L1pack)
+model_lad <- lad(SMIPPPY~., data = data_scaled)
+```
+
+LAD coefficients
+```{r, fig.width=20}
+# LAD
+coef_lad <- coef(model_lad)
+labels_lad <- names(coef_lad)
+df_lad <- data.frame(Labels = labels_lad, Coefficients = coef_lad)
+ggplot(df_lad, aes(x = labels_lad, y = coef_lad)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Coefficient Sizes (LAD)", x = "Coefficient Labels", y = "Coefficient Sizes")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))  # Rotate labels
+  
+```
+
+
+```{r}
+plot(model_lad)
+```
+
+
+IRLS_huber_bisquare coefficients
+```{r, fig.height=20}
+library(MASS)
+library(ggplot2)
+irls_h <- rlm(SMIPPPY ~ ., psi=psi.huber, init='ls', data = data_scaled, maxit=100)
+irls_bs <- rlm(SMIPPPY ~ ., psi=psi.bisquare, init=coef(irls_h), data = data_scaled, maxit=200)
+
+# irls
+coef_h <- coef(irls_bs)
+labels_h <- names(coef_h)
+df_h <- data.frame(Labels = labels_h, Coefficients = coef_h)
+ggplot(df_h, aes(x = labels_h, y = coef_h)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Coefficient Sizes (IRLS)", x = "Coefficient Labels", y = "Coefficient Sizes") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))  # Rotate labels
+```
+```{r}
+plot(model_irls_h)
+```
+
+
+Rounding SMIPPPY to positive integers like counts (poisson)
+```{r}
+model_poisson <- glm(round(SMIPPPY+6) ~ ., data = data_scaled, family = poisson(link = "log"))
+plot(model_poisson)
+```
+GoF Tests
+```{r}
+pchisq(model_poisson$deviance, model_poisson$df.residual, lower.tail = FALSE)
+model_poisson$deviance/model_poisson$df.residual
+```
+Binomial GLM and Tests
+```{r}
+model_binomial <- glm(SMIPPPY ~ ., data = data2_scaled, family = binomial)
+
+library(ResourceSelection)
+hoslem.test(ifelse(data$SMIPPPY > 0.5, 1, 0), fitted(model_binomial))
+```
+
+IRLS wls (using y)
+```{r}
+old_beta <- model$coefficients
+new_beta <- model_w$coefficients
+model_ir <- model_w
+tol <- 1e-3
+count <- 0
+
+while (max((new_beta - old_beta)/old_beta) > tol) {
+  old_beta <- new_beta
+  weights <- 1 / lm(abs(model_ir$residuals) ~ model_ir$fitted)$fitted.values^2
+  model_ir <- lm(SMIPPPY ~ ., data = data_scaled, weights=weights)
+  new_beta <- model_ir$coefficients
+  print(sum(weights*model_ir$residuals^2)/(nrow(data_scaled)-length(model_ir$coefficients)))
+  count <- count + 1
+}
+print(count)
+```
+
+T test on IRLS
+```{r}
+library(sandwich)
+library(lmtest)
+
+# Heteroscedasticity-robust covariance matrix (White estimator)
+robust_cov <- vcovHC(model_ir, type = "HC0")
+
+# Print heteroscedasticity-robust standard errors using coeftest
+coeftest(model_ir, vcov = robust_cov)
+```
+
+IRLS WLS coefficients
+```{r}
+# IRLSWLS original
+fitted_wls <- model_ir$fitted.values
+stud_res_wls <- rstudent(model_ir)
+df_stud_wls <- data.frame(Fitted = fitted_wls, Studentized_Residuals = stud_res_wls) 
+ggplot(df_stud_wls, aes(x = Fitted, y = Studentized_Residuals)) +
+  geom_point(color = "steelblue") +
+  geom_smooth(method = "loess", color = "green", se = FALSE, lwd = 1.2, span = 0.75) +  # Add LOWESS line 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +  # Add a horizontal line at y = 0
+  theme_minimal() +
+  labs(title = "Studentized Residuals vs Fitted Values (IRLSWLS original)", 
+       x = "Fitted Values", 
+       y = "Studentized Residuals")
+```
+
+Combining all coefficients
+```{r, fig.width=20}
+# Load necessary libraries
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Extract the coefficients 
+coef_model_o <- coef(model)
+coef_model_w <- coef(model_w)
+coef_model_irls_wls <- coef(model_ir)
+coef_model_lad <- coef(model_lad)
+coef_model_irls <- coef(irls_bs)
+
+# Combine the coefficients into a data frame
+coef_df <- data.frame(
+  Coefficients = c(names(coef_model_o), names(coef_model_w), names(coef_model_irls_wls), names(coef_model_lad), names(coef_model_irls)),
+  Estimate = c(coef_model_o, coef_model_w, coef_model_irls_wls, coef_model_lad, coef_model_irls),
+  Model = c(rep("OLS", length(coef_model_o)), rep("WLS", length(coef_model_w)), rep("IRWLS", length(coef_model_irls_wls)), rep("LAD", length(coef_model_lad)), rep("IRLS", length(coef_model_irls)))
+)
+
+# Convert the 'Model' variable to a factor and specify the order
+coef_df$Model <- factor(coef_df$Model, levels = c("OLS", "WLS", "IRWLS", "LAD", "IRLS"))
+
+# Plot the coefficients using ggplot2 with custom colors and specified order
+ggplot(coef_df, aes(x = Coefficients, y = Estimate, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Coefficient Sizes for Different Models",
+       y = "Coefficient Estimate",
+       x = "Coefficient") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +  # Rotate labels
+  scale_fill_manual(values = c("OLS" = "blue",  # Blue for OLS
+                               "WLS" = "orange",  # Orange for WLS
+                               "IRWLS" = "green",  # Green for IRWLS
+                               "LAD" = "red",  # Red for LAD
+                               "IRLS" = "yellow"))  # Yellow for IRLS
+```
+
+Comparing LAD and backward model coefficients
+```{r, fig.width=20}
+# Load necessary libraries
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+
+# Extract the coefficients 
+coef_model_lad <- coef(model_lad)
+coef_model_backward <- coef(backward_model)
+
+# Combine the coefficients into a data frame
+coef_df <- data.frame(
+  Coefficients = c(names(coef_model_lad), names(coef_model_backward)),
+  Estimate = c(coef_model_lad, coef_model_backward),
+  Model = c(rep("LAD", length(coef_model_lad)), rep("Backward", length(coef_model_backward)))
+)
+
+# Plot the coefficients using ggplot2 with custom colors and specified order
+ggplot(coef_df, aes(x = Coefficients, y = Estimate, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Coefficient Sizes for Different Models",
+       y = "Coefficient Estimate",
+       x = "Coefficient") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +  # Rotate labels
+  scale_fill_manual(values = c("LAD" = "purple",  # Purple for LAD
+                               "Backward" = "grey"))  # Grey for Backward
+```
+
+
+Checking if rstudent calculations are correct
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Step 3: Extract residuals and fitted values
+residuals <- residuals(model_w)
+
+# Step 4: Calculate the hat values (leverage)
+influence_measures <- lm.influence(model_w, do.coef=FALSE)
+hat_values <- influence_measures$hat
+
+# Compute studentized residuals manually and using rstudent() for comparison
+SSE = sum(residuals^2) 
+studentized_residuals_manual <- residuals * sqrt((n-p-1)/(SSE * (1 - hat_values) - residuals^2)) 
+
+# Data frame for plotting
+df_stud_manual <- data.frame(Fitted = model_w$fitted.values, Studentized_Residuals = studentized_residuals_manual)
+
+# Plot manual internal studentized residuals
+ggplot(df_stud_manual, aes(x = Fitted, y = Studentized_Residuals)) +
+  geom_point(color = "steelblue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +  
+  theme_minimal() +
+  labs(title = "Studentized Residuals vs Fitted Values (External)", 
+       x = "Fitted Values", 
+       y = "Studentized Residuals") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+
+Ordinal logistic regression with MICATPY.
+```{r}
+ordered_model <- polr(MICATPY~., data=data3_scaled, Hess=TRUE)
+summary(ordered_model)
+```
+
+```{r}
+library(MASS)
+null_model <- polr(MICATPY~1, data=data3_scaled, Hess=TRUE)
+
+pseudo_r2 <- 1 - (logLik(ordered_model)/logLik(null_model))
+pseudo_r2
+```
+
+```{r}
+predicted <- predict(ordered_model, newdata=data3_scaled)
+
+accuracy <- mean(predicted == data3$MICATPY)
+accuracy
+baseline <- mean(data3$MICATPY == 0)
+baseline
+```
+
